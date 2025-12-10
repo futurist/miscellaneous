@@ -175,21 +175,26 @@ fn build_client(args: &Args) -> Result<reqwest::Client> {
         client_builder = client_builder.proxy(proxy);
     } else {
         // Check environment variables for proxy configuration
-        if let Ok(http_proxy) = std::env::var("HTTP_PROXY") {
-            println!("Using HTTP_PROXY from environment: {}", http_proxy);
-            let proxy = reqwest::Proxy::http(&http_proxy)
-                .context(format!("Invalid HTTP_PROXY: {}", http_proxy))?;
-            client_builder = client_builder.proxy(proxy);
-        } else if let Ok(https_proxy) = std::env::var("HTTPS_PROXY") {
-            println!("Using HTTPS_PROXY from environment: {}", https_proxy);
-            let proxy = reqwest::Proxy::https(&https_proxy)
-                .context(format!("Invalid HTTPS_PROXY: {}", https_proxy))?;
-            client_builder = client_builder.proxy(proxy);
-        } else if let Ok(all_proxy) = std::env::var("ALL_PROXY") {
+        // Try ALL_PROXY first as it applies to all protocols
+        if let Ok(all_proxy) = std::env::var("ALL_PROXY") {
             println!("Using ALL_PROXY from environment: {}", all_proxy);
             let proxy = reqwest::Proxy::all(&all_proxy)
                 .context(format!("Invalid ALL_PROXY: {}", all_proxy))?;
             client_builder = client_builder.proxy(proxy);
+        } else {
+            // Otherwise, configure HTTP and HTTPS proxies separately
+            if let Ok(http_proxy) = std::env::var("HTTP_PROXY") {
+                println!("Using HTTP_PROXY from environment: {}", http_proxy);
+                let proxy = reqwest::Proxy::http(&http_proxy)
+                    .context(format!("Invalid HTTP_PROXY: {}", http_proxy))?;
+                client_builder = client_builder.proxy(proxy);
+            }
+            if let Ok(https_proxy) = std::env::var("HTTPS_PROXY") {
+                println!("Using HTTPS_PROXY from environment: {}", https_proxy);
+                let proxy = reqwest::Proxy::https(&https_proxy)
+                    .context(format!("Invalid HTTPS_PROXY: {}", https_proxy))?;
+                client_builder = client_builder.proxy(proxy);
+            }
         }
     }
 
