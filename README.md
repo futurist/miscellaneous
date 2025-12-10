@@ -4,6 +4,7 @@ miscellaneous stuff will put here, configurations, code templates, tools, etc.
 ### Tools
 * [tools/jekyll-post-template.py](tools/jekyll-post-template.py) A simple script to generate jekyll post header
 * [tools/mcurl.sh](tools/mcurl.sh) Simulate mutiple threads(multiple process) download in `curl`
+* [tools/mcurl-rs](tools/mcurl-rs) Multi-threaded downloader written in Rust with proxy support (HTTP, HTTPS, SOCKS5)
 * [tools/eclipse2as.sh](tools/eclipse2as.sh) Convert Android eclipse project to android studio project
 * [tools/padb.sh](tools/padb.sh) ADB push with progress display from commandline
 * [tools/build-apk-manually.sh](tools/build-apk-manually.sh) Illustrate how a APK is built from `aapt`, `dx`, `jarsigner`, etc.

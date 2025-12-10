@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 
 /// Multi-threaded curl-like downloader with proxy support
 #[derive(Parser, Debug)]
@@ -89,6 +89,7 @@ async fn main() -> Result<()> {
         .context(format!("Failed to create output file: {}", output_file))?;
     file.set_len(content_length)
         .context("Failed to preallocate file")?;
+    let file = Arc::new(Mutex::new(file));
 
     // Calculate slice size
     let slice_size = (content_length + args.slices as u64 - 1) / args.slices as u64;
@@ -114,6 +115,7 @@ async fn main() -> Result<()> {
             let client = Arc::clone(&client);
             let url = Arc::clone(&url);
             let progress = Arc::clone(&progress);
+            let file = Arc::clone(&file);
 
             async move {
                 let _permit = semaphore.acquire().await.unwrap();
@@ -125,29 +127,27 @@ async fn main() -> Result<()> {
                     (i as u64 + 1) * slice_size - 1
                 };
 
-                download_slice(&client, &url, start, end, &progress).await
+                let data = download_slice(&client, &url, start, end, &progress).await?;
+                
+                // Write to file with proper synchronization
+                let mut file_guard = file.lock().await;
+                file_guard.seek(SeekFrom::Start(start))
+                    .context("Failed to seek in file")?;
+                file_guard.write_all(&data).context("Failed to write to file")?;
+                
+                Ok::<(), anyhow::Error>(())
             }
         })
         .collect();
 
-    let results: Vec<Result<Vec<u8>>> = stream::iter(tasks)
+    let results: Vec<Result<()>> = stream::iter(tasks)
         .buffer_unordered(args.slices)
         .collect()
         .await;
 
-    // Write slices to file
-    for (i, result) in results.into_iter().enumerate() {
-        let data = result?;
-        let start = i as u64 * slice_size;
-        
-        let mut file = OpenOptions::new()
-            .write(true)
-            .open(&output_file)
-            .context("Failed to open file for writing")?;
-        
-        file.seek(SeekFrom::Start(start))
-            .context("Failed to seek in file")?;
-        file.write_all(&data).context("Failed to write to file")?;
+    // Check for errors
+    for result in results {
+        result?;
     }
 
     progress.finish_with_message("Download complete!");
@@ -216,10 +216,8 @@ async fn download_slice(
         anyhow::bail!("Server returned error status: {}", response.status());
     }
 
-    let mut data = Vec::new();
     let bytes = response.bytes().await.context("Failed to read response bytes")?;
-    data.extend_from_slice(&bytes);
     progress.inc(bytes.len() as u64);
 
-    Ok(data)
+    Ok(bytes.to_vec())
 }
