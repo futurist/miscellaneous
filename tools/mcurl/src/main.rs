@@ -18,7 +18,7 @@ use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Semaphore;
@@ -75,7 +75,7 @@ async fn download_chunk(
     url: &str,
     start: u64,
     end: u64,
-    output_file: &PathBuf,
+    output_file: &Path,
     chunk_index: usize,
 ) -> Result<()> {
     let client = reqwest::Client::new();
@@ -113,7 +113,7 @@ async fn download_chunk(
     Ok(())
 }
 
-async fn merge_chunks(output_file: &PathBuf, total_slices: usize) -> Result<()> {
+async fn merge_chunks(output_file: &Path, total_slices: usize) -> Result<()> {
     let mut final_file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -227,7 +227,7 @@ fn derive_filename_from_url(url: &str) -> Result<String> {
     // Get the last path segment
     let filename = url_no_query
         .split('/')
-        .last()
+        .next_back()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow!("Could not derive filename from URL"))?;
     
