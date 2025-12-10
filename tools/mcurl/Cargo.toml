@@ -1,0 +1,16 @@
+[package]
+name = "mcurl"
+version = "0.1.1"
+edition = "2021"
+authors = ["Wanghong Lin"]
+license = "Apache-2.0"
+description = "Multi-threaded HTTP/HTTPS file downloader"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["blocking"] }
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
+num_cpus = "1.0"
+anyhow = "1.0"
+futures = "0.3"
