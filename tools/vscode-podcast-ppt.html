@@ -364,12 +364,22 @@
         
         // Keyboard navigation
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'ArrowRight' || e.key === ' ') {
+            if (e.key === 'ArrowRight') {
                 e.preventDefault();
                 nextSlide();
             } else if (e.key === 'ArrowLeft') {
                 e.preventDefault();
                 previousSlide();
+            } else if (e.key === ' ') {
+                // Check if slide content is scrollable and not at bottom
+                const slideContent = document.querySelector('.slide.active .slide-content');
+                const isScrollable = slideContent.scrollHeight > slideContent.clientHeight;
+                const isAtBottom = Math.abs(slideContent.scrollHeight - slideContent.clientHeight - slideContent.scrollTop) < 1;
+                
+                if (!isScrollable || isAtBottom) {
+                    e.preventDefault();
+                    nextSlide();
+                }
             } else if (e.key === 'Home') {
                 e.preventDefault();
                 showSlide(0);

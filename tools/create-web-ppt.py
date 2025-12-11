@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Create a web-based PowerPoint-style presentation from a URL.
-This tool fetches content from a URL and generates an HTML presentation using reveal.js.
+This tool fetches content from a URL and generates an HTML presentation with custom animations.
 
 Usage:
     python3 create-web-ppt.py <url> [output_file]
@@ -332,10 +332,22 @@ def generate_html_presentation(data, output_file):
         
         // Keyboard navigation
         document.addEventListener('keydown', (e) => {{
-            if (e.key === 'ArrowRight' || e.key === ' ') {{
+            if (e.key === 'ArrowRight') {{
+                e.preventDefault();
                 nextSlide();
             }} else if (e.key === 'ArrowLeft') {{
+                e.preventDefault();
                 previousSlide();
+            }} else if (e.key === ' ') {{
+                // Check if slide content is scrollable and not at bottom
+                const slideContent = document.querySelector('.slide.active .slide-content');
+                const isScrollable = slideContent.scrollHeight > slideContent.clientHeight;
+                const isAtBottom = Math.abs(slideContent.scrollHeight - slideContent.clientHeight - slideContent.scrollTop) < 1;
+                
+                if (!isScrollable || isAtBottom) {{
+                    e.preventDefault();
+                    nextSlide();
+                }}
             }}
         }});
         
