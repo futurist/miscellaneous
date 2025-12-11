@@ -2,6 +2,7 @@
 miscellaneous stuff will put here, configurations, code templates, tools, etc.
 
 ### Tools
+* [tools/create-web-ppt.py](tools/create-web-ppt.py) Create web-based PowerPoint-style presentation from a URL with smooth animations and keyboard navigation
 * [tools/jekyll-post-template.py](tools/jekyll-post-template.py) A simple script to generate jekyll post header
 * [tools/mcurl.sh](tools/mcurl.sh) Simulate mutiple threads(multiple process) download in `curl`
 * [tools/eclipse2as.sh](tools/eclipse2as.sh) Convert Android eclipse project to android studio project

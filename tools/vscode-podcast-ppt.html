@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Introducing VS Code Insiders Podcast</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+        }
+        
+        .presentation {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .slide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 60px;
+            opacity: 0;
+            transform: translateX(100%);
+            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .slide.active {
+            opacity: 1;
+            transform: translateX(0);
+            z-index: 2;
+        }
+        
+        .slide.prev {
+            opacity: 0;
+            transform: translateX(-100%);
+            z-index: 1;
+        }
+        
+        .slide-content {
+            background: white;
+            border-radius: 20px;
+            padding: 50px;
+            max-width: 900px;
+            width: 100%;
+            max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        .slide-content h1 {
+            font-size: 2.5em;
+            color: #2d3748;
+            margin-bottom: 30px;
+            line-height: 1.2;
+        }
+        
+        .slide-content h2 {
+            font-size: 2em;
+            color: #2d3748;
+            margin-bottom: 25px;
+            line-height: 1.3;
+        }
+        
+        .slide-content p {
+            font-size: 1.2em;
+            color: #4a5568;
+            line-height: 1.8;
+            margin-bottom: 20px;
+        }
+        
+        .slide-content ul, .slide-content ol {
+            font-size: 1.1em;
+            color: #4a5568;
+            line-height: 1.8;
+            margin-left: 30px;
+            margin-bottom: 20px;
+        }
+        
+        .slide-content li {
+            margin-bottom: 10px;
+        }
+        
+        .slide-content blockquote {
+            border-left: 4px solid #667eea;
+            padding-left: 20px;
+            margin: 20px 0;
+            font-style: italic;
+            color: #4a5568;
+            font-size: 1.1em;
+        }
+        
+        .slide-content img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 10px;
+            margin: 20px 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .controls {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 1000;
+        }
+        
+        .controls button {
+            background: white;
+            border: none;
+            padding: 15px 25px;
+            font-size: 16px;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s;
+            font-weight: 600;
+            color: #667eea;
+        }
+        
+        .controls button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .controls button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .slide-counter {
+            position: fixed;
+            top: 30px;
+            right: 30px;
+            background: white;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #667eea;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+        }
+        
+        @media (max-width: 768px) {
+            .slide-content {
+                padding: 30px;
+                max-height: 80vh;
+            }
+            
+            .slide-content h1 {
+                font-size: 1.8em;
+            }
+            
+            .slide-content h2 {
+                font-size: 1.5em;
+            }
+            
+            .slide-content p {
+                font-size: 1em;
+            }
+        }
+        
+        .title-slide .slide-content {
+            text-align: center;
+        }
+        
+        .title-slide h1 {
+            font-size: 3em;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .vscode-logo {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 30px;
+            background: linear-gradient(135deg, #007acc 0%, #005a9e 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 60px;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="presentation">
+        <div class="slide title-slide">
+            <div class="slide-content">
+                <div class="vscode-logo">VS</div>
+                <h1>Introducing VS Code Insiders Podcast</h1>
+                <p>A new way to stay connected with Visual Studio Code</p>
+            </div>
+        </div>
+        
+        <div class="slide">
+            <div class="slide-content">
+                <h2>What is the VS Code Insiders Podcast?</h2>
+                <p>The VS Code Insiders Podcast is a new initiative from the Visual Studio Code team to bring you closer to the development process and the people behind your favorite code editor.</p>
+                <ul>
+                    <li>Behind-the-scenes insights into VS Code development</li>
+                    <li>Interviews with team members and community contributors</li>
+                    <li>Updates on new features and roadmap</li>
+                    <li>Tips and tricks from the experts</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="slide">
+            <div class="slide-content">
+                <h2>Why a Podcast?</h2>
+                <p>The team wanted to create a more personal and engaging way to connect with the VS Code community.</p>
+                <blockquote>
+                    "We realized that there's so much happening behind the scenes that our users would love to know about, and a podcast is the perfect medium to share these stories."
+                </blockquote>
+                <p>The podcast format allows for:</p>
+                <ul>
+                    <li>In-depth discussions about technical decisions</li>
+                    <li>Casual conversations with the development team</li>
+                    <li>Community feedback and Q&A sessions</li>
+                    <li>Accessibility for users on-the-go</li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="slide">
+            <div class="slide-content">
+                <h2>Episode Topics</h2>
+                <p>Each episode will cover different aspects of VS Code:</p>
+                <ol>
+                    <li><strong>Feature Deep Dives:</strong> Detailed explorations of new and existing features</li>
+                    <li><strong>Extension Ecosystem:</strong> Highlighting popular extensions and their creators</li>
+                    <li><strong>Performance & Architecture:</strong> How VS Code stays fast and efficient</li>
+                    <li><strong>Community Spotlights:</strong> Featuring contributions from the open-source community</li>
+                    <li><strong>Future Vision:</strong> What's coming next for VS Code</li>
+                </ol>
+            </div>
+        </div>
+        
+        <div class="slide">
+            <div class="slide-content">
+                <h2>How to Listen</h2>
+                <p>The VS Code Insiders Podcast is available on all major podcast platforms:</p>
+                <ul>
+                    <li>Spotify</li>
+                    <li>Apple Podcasts</li>
+                    <li>Google Podcasts</li>
+                    <li>YouTube</li>
+                    <li>RSS Feed for your favorite podcast app</li>
+                </ul>
+                <p>New episodes will be released bi-weekly, with special episodes for major releases and events.</p>
+            </div>
+        </div>
+        
+        <div class="slide">
+            <div class="slide-content">
+                <h2>Get Involved</h2>
+                <p>The VS Code team wants to hear from you!</p>
+                <ul>
+                    <li>Submit questions for upcoming episodes</li>
+                    <li>Suggest topics you'd like to hear about</li>
+                    <li>Share your VS Code setup and workflows</li>
+                    <li>Participate in community episodes</li>
+                </ul>
+                <p>Join the conversation on social media using <strong>#VSCodeInsiders</strong></p>
+            </div>
+        </div>
+        
+        <div class="slide">
+            <div class="slide-content">
+                <h2>What's Next?</h2>
+                <p>The first episodes are already available, featuring:</p>
+                <ul>
+                    <li>An introduction to the VS Code team</li>
+                    <li>The history and evolution of VS Code</li>
+                    <li>A look at the most requested features</li>
+                    <li>Tips for getting the most out of VS Code</li>
+                </ul>
+                <p>Subscribe now to never miss an episode and stay ahead with the latest VS Code insights!</p>
+            </div>
+        </div>
+        
+        <div class="slide">
+            <div class="slide-content">
+                <h2>Thank You!</h2>
+                <p style="text-align: center; font-size: 1.5em; margin-top: 40px;">
+                    🎙️ VS Code Insiders Podcast
+                </p>
+                <p style="text-align: center;">
+                    Subscribe, listen, and code better!
+                </p>
+                <p style="text-align: center; margin-top: 40px; color: #718096;">
+                    Visit: code.visualstudio.com/blogs
+                </p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="slide-counter">
+        <span id="current-slide">1</span> / <span id="total-slides">8</span>
+    </div>
+    
+    <div class="controls">
+        <button id="prev-btn" onclick="previousSlide()">← Previous</button>
+        <button id="next-btn" onclick="nextSlide()">Next →</button>
+    </div>
+    
+    <script>
+        let currentSlide = 0;
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+        
+        document.getElementById('total-slides').textContent = totalSlides;
+        
+        function showSlide(n) {
+            slides.forEach((slide, index) => {
+                slide.classList.remove('active', 'prev');
+                if (index === n) {
+                    slide.classList.add('active');
+                } else if (index < n) {
+                    slide.classList.add('prev');
+                }
+            });
+            
+            currentSlide = n;
+            document.getElementById('current-slide').textContent = currentSlide + 1;
+            document.getElementById('prev-btn').disabled = currentSlide === 0;
+            document.getElementById('next-btn').disabled = currentSlide === totalSlides - 1;
+        }
+        
+        function nextSlide() {
+            if (currentSlide < totalSlides - 1) {
+                showSlide(currentSlide + 1);
+            }
+        }
+        
+        function previousSlide() {
+            if (currentSlide > 0) {
+                showSlide(currentSlide - 1);
+            }
+        }
+        
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
+                nextSlide();
+            } else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                previousSlide();
+            } else if (e.key === 'Home') {
+                e.preventDefault();
+                showSlide(0);
+            } else if (e.key === 'End') {
+                e.preventDefault();
+                showSlide(totalSlides - 1);
+            }
+        });
+        
+        // Initialize
+        showSlide(0);
+    </script>
+</body>
+</html>
