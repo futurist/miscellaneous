@@ -21,10 +21,12 @@
 # v0.1.1      add output option
 # v0.2        support both curl and wget, fix concat bug, show percentage and speed
 # v0.2.1      add -t|tool option, add fallback to single-threaded download on errors
+# v0.2.2      add support for passing extra args to curl/wget via -x option or env vars
 
 slices=20
 downloader=""
 stall_timeout=30  # seconds without progress before fallback to single-threaded
+extra_args=""  # additional arguments to pass to curl/wget
 
 case $OSTYPE in
     *linux*) slices=$(grep -c processor /proc/cpuinfo) ;;
@@ -36,7 +38,7 @@ esac
 url=
 output=
 
-__ScriptVersion="v0.2.1"
+__ScriptVersion="v0.2.2"
 
 #===  FUNCTION  ================================================================
 #         NAME:  usage
@@ -52,7 +54,12 @@ function usage ()
     -s|slice      How many slices the download task will split, default is $slices
     -o|output     Specify the output file name, use the guessing file name from url as output file name if not specify this option
     -t|tool       Specify download tool to use (curl or wget), auto-detect if not specified
-    -d|downloader Same as -t option (for backward compatibility)"
+    -d|downloader Same as -t option (for backward compatibility)
+    -x|extra-args Extra arguments to pass to curl/wget (e.g., '--connect-timeout 10')
+    
+    Environment Variables:
+    CURL_OPTS     Extra options to pass to curl (when curl is used)
+    WGET_OPTS     Extra options to pass to wget (when wget is used)"
 
 }    # ----------  end of function usage  ----------
 
@@ -60,7 +67,7 @@ function usage ()
 #  Handle command line arguments
 #-----------------------------------------------------------------------
 
-while getopts ":hvs:o:d:t:" opt
+while getopts ":hvs:o:d:t:x:" opt
 do
     case $opt in
 	h|help     )  usage; exit 0   ;;
@@ -69,6 +76,7 @@ do
 	o|output   )  output=$OPTARG ;;
 	d|downloader ) downloader=$OPTARG ;;
 	t|tool     ) downloader=$OPTARG ;;
+	x|extra-args ) extra_args=$OPTARG ;;
 	* )  echo -e "\n  Option does not exist : $OPTARG\n"
 	    usage; exit 1   ;;
     esac    # --- end of case ---
@@ -106,29 +114,46 @@ if ! command -v $downloader &> /dev/null; then
     exit 1
 fi
 
+# Merge extra arguments from environment variables and command line
+if [ "$downloader" = "curl" ];then
+    tool_extra_opts="${CURL_OPTS:-}"
+else
+    tool_extra_opts="${WGET_OPTS:-}"
+fi
+
+# Command-line extra args take precedence and are added to env vars
+if [ -n "$extra_args" ];then
+    if [ -n "$tool_extra_opts" ];then
+        tool_extra_opts="$tool_extra_opts $extra_args"
+    else
+        tool_extra_opts="$extra_args"
+    fi
+fi
+
 url_no_query=${url%%\?*}
 file_to_save=${url_no_query##*/}
 
 [ x$output != x ] && file_to_save=$output
 
 echo "Download $url to $file_to_save with $slices tasks using $downloader."
+[ -n "$tool_extra_opts" ] && echo "Extra options: $tool_extra_opts"
 
 # Function to perform single-threaded download fallback
 function fallback_download()
 {
 	if [ "$downloader" = "curl" ];then
-		curl "$url" -o "${file_to_save}"
+		curl $tool_extra_opts "$url" -o "${file_to_save}"
 	else
-		wget "$url" -O "${file_to_save}"
+		wget $tool_extra_opts "$url" -O "${file_to_save}"
 	fi
 	exit $?
 }
 
 # Get content length based on downloader
 if [ "$downloader" = "curl" ];then
-    size_in_byte=$(curl -I "$url" 2>/dev/null | sed -n 's/\([Cc]ontent-[Ll]ength:\)\(.*\)/\2/p' | tr -d [[:space:]])
+    size_in_byte=$(curl $tool_extra_opts -I "$url" 2>/dev/null | sed -n 's/\([Cc]ontent-[Ll]ength:\)\(.*\)/\2/p' | tr -d [[:space:]])
 else
-    size_in_byte=$(wget --spider --server-response "$url" 2>&1 | sed -n 's/.*[Cc]ontent-[Ll]ength: *\([0-9]*\).*/\1/p' | tail -1)
+    size_in_byte=$(wget $tool_extra_opts --spider --server-response "$url" 2>&1 | sed -n 's/.*[Cc]ontent-[Ll]ength: *\([0-9]*\).*/\1/p' | tail -1)
 fi
 
 # Fallback to single-threaded download if content length is not available
@@ -162,13 +187,13 @@ function callback()
 function run()
 {
 	if [ "$downloader" = "curl" ];then
-		curl -r "$2-$3" "$url" -o "$1" 2>/dev/null && kill -n 10 $$ &
+		curl $tool_extra_opts -r "$2-$3" "$url" -o "$1" 2>/dev/null && kill -n 10 $$ &
 	else
 		# wget uses different syntax for range requests
 		if [ -z "$3" ];then
-			wget --header="Range: bytes=$2-" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
+			wget $tool_extra_opts --header="Range: bytes=$2-" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
 		else
-			wget --header="Range: bytes=$2-$3" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
+			wget $tool_extra_opts --header="Range: bytes=$2-$3" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
 		fi
 	fi
 }
