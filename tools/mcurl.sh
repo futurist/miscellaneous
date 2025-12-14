@@ -19,8 +19,10 @@
 # Changelog
 # v0.1        initial version
 # v0.1.1      add output option
+# v0.2        support both curl and wget, fix concat bug, show percentage and speed
 
 slices=20
+downloader=""
 
 case $OSTYPE in
     *linux*) slices=$(grep -c processor /proc/cpuinfo) ;;
@@ -32,7 +34,7 @@ esac
 url=
 output=
 
-__ScriptVersion="v0.1.1"
+__ScriptVersion="v0.2"
 
 #===  FUNCTION  ================================================================
 #         NAME:  usage
@@ -46,7 +48,8 @@ function usage ()
     -h|help       Display this message
     -v|version    Display script version
     -s|slice      How many slices the download task will split, default is $slices
-    -o|output     Specify the output file name, use the guessing file name from url as output file name if not specify this option"
+    -o|output     Specify the output file name, use the guessing file name from url as output file name if not specify this option
+    -d|downloader Specify downloader to use (curl or wget), auto-detect if not specified"
 
 }    # ----------  end of function usage  ----------
 
@@ -54,13 +57,14 @@ function usage ()
 #  Handle command line arguments
 #-----------------------------------------------------------------------
 
-while getopts ":hv:s:o:" opt
+while getopts ":hvs:o:d:" opt
 do
     case $opt in
 	h|help     )  usage; exit 0   ;;
-	v|version  )  echo "Multi tasks downloader for curl, version $__ScriptVersion"; exit 0   ;;
+	v|version  )  echo "Multi tasks downloader for curl/wget, version $__ScriptVersion"; exit 0   ;;
 	s|slice    )  slices=$OPTARG ;;
 	o|output   )  output=$OPTARG ;;
+	d|downloader ) downloader=$OPTARG ;;
 	* )  echo -e "\n  Option does not exist : $OPTARG\n"
 	    usage; exit 1   ;;
     esac    # --- end of case ---
@@ -75,14 +79,42 @@ if ! [[ $url =~ ^https?://.*$ ]];then
     exit 1
 fi
 
+# Auto-detect downloader if not specified
+if [ x$downloader = x ];then
+    if command -v curl &> /dev/null; then
+        downloader="curl"
+    elif command -v wget &> /dev/null; then
+        downloader="wget"
+    else
+        printf "\e[31mNeither curl nor wget found. Please install one of them.\e[0m\n"
+        exit 1
+    fi
+fi
+
+# Validate downloader choice
+if [ "$downloader" != "curl" ] && [ "$downloader" != "wget" ];then
+    printf "\e[31mInvalid downloader: $downloader. Must be 'curl' or 'wget'.\e[0m\n"
+    exit 1
+fi
+
+if ! command -v $downloader &> /dev/null; then
+    printf "\e[31m$downloader is not installed.\e[0m\n"
+    exit 1
+fi
+
 url_no_query=${url%%\?*}
 file_to_save=${url_no_query##*/}
 
 [ x$output != x ] && file_to_save=$output
 
-echo "Download $url to $file_to_save with $slices tasks."
+echo "Download $url to $file_to_save with $slices tasks using $downloader."
 
-size_in_byte=$(curl -I "$url" 2>/dev/null | sed -n 's/\([Cc]ontent-[Ll]ength:\)\(.*\)/\2/p' | tr -d [[:space:]])
+# Get content length based on downloader
+if [ "$downloader" = "curl" ];then
+    size_in_byte=$(curl -I "$url" 2>/dev/null | sed -n 's/\([Cc]ontent-[Ll]ength:\)\(.*\)/\2/p' | tr -d [[:space:]])
+else
+    size_in_byte=$(wget --spider --server-response "$url" 2>&1 | sed -n 's/.*[Cc]ontent-[Ll]ength: *\([0-9]*\).*/\1/p' | tail -1)
+fi
 
 if ! [[ $size_in_byte =~ ^[0-9]+$ ]];then
     printf "\e[31mCould not get content length, make sure your resource have content length response.\e[0m\n"
@@ -97,12 +129,15 @@ finished_slice=0
 is_finished=0
 function callback()
 {
-	subp=$(pgrep -P $$ | wc -l)
-	if [  $subp -eq 1 ];then
-		for s in `seq $total_slice`
+	finished_slice=$((finished_slice+1))
+	if [ $finished_slice -eq $total_slice ];then
+		# Concatenate all parts in order
+		for s in `seq 1 $total_slice`
 		do
-			cat $$.$s >> "${file_to_save}"
-			rm $$.$s
+			if [ -f $$.$s ];then
+				cat $$.$s >> "${file_to_save}"
+				rm $$.$s
+			fi
 		done
 		is_finished=1
 	fi
@@ -110,7 +145,16 @@ function callback()
 
 function run()
 {
-	curl -r $2-$3 $url -o $1 2>/dev/null && kill -n 10 $$ &
+	if [ "$downloader" = "curl" ];then
+		curl -r $2-$3 "$url" -o $1 2>/dev/null && kill -n 10 $$ &
+	else
+		# wget uses different syntax for range requests
+		if [ -z "$3" ];then
+			wget --header="Range: bytes=$2-" "$url" -O $1 2>/dev/null && kill -n 10 $$ &
+		else
+			wget --header="Range: bytes=$2-$3" "$url" -O $1 2>/dev/null && kill -n 10 $$ &
+		fi
+	fi
 }
 
 trap callback 10
@@ -129,12 +173,27 @@ do
 	run $$.$s $begin $end
 done
 
+prev_kb=0
 until [ $is_finished -eq 1 ]
 do
 	if [ -f $$.1 ];then
-		total_kb=$(BLOCKSIZE=1024 du -k $$.* | awk '{t+=$1}END{printf "%d", t}')
+		total_kb=$(BLOCKSIZE=1024 du -k $$.* 2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
 		duration=$((`date +%s`-$start_time))
-		[ $duration -gt 0 ] && printf "\rCurrent average speed %4d KiB/s" $(($total_kb/$duration))
+		
+		# Calculate percentage (cap at 100%)
+		downloaded_bytes=$((total_kb * 1024))
+		percentage=$((downloaded_bytes * 100 / size_in_byte))
+		[ $percentage -gt 100 ] && percentage=100
+		
+		# Calculate current speed (instantaneous)
+		current_speed=$((total_kb - prev_kb))
+		prev_kb=$total_kb
+		
+		# Calculate average speed
+		if [ $duration -gt 0 ];then
+			avg_speed=$(($total_kb/$duration))
+			printf "\rProgress: %3d%% | Speed: %4d KiB/s | Avg: %4d KiB/s" $percentage $current_speed $avg_speed
+		fi
 	fi
 	sleep 1
 done
