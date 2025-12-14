@@ -20,6 +20,7 @@
 # v0.1        initial version
 # v0.1.1      add output option
 # v0.2        support both curl and wget, fix concat bug, show percentage and speed
+# v0.2.1      add -t|tool option, add fallback to single-threaded download on errors
 
 slices=20
 downloader=""
@@ -34,7 +35,7 @@ esac
 url=
 output=
 
-__ScriptVersion="v0.2"
+__ScriptVersion="v0.2.1"
 
 #===  FUNCTION  ================================================================
 #         NAME:  usage
@@ -49,7 +50,8 @@ function usage ()
     -v|version    Display script version
     -s|slice      How many slices the download task will split, default is $slices
     -o|output     Specify the output file name, use the guessing file name from url as output file name if not specify this option
-    -d|downloader Specify downloader to use (curl or wget), auto-detect if not specified"
+    -t|tool       Specify download tool to use (curl or wget), auto-detect if not specified
+    -d|downloader Same as -t option (for backward compatibility)"
 
 }    # ----------  end of function usage  ----------
 
@@ -57,7 +59,7 @@ function usage ()
 #  Handle command line arguments
 #-----------------------------------------------------------------------
 
-while getopts ":hvs:o:d:" opt
+while getopts ":hvs:o:d:t:" opt
 do
     case $opt in
 	h|help     )  usage; exit 0   ;;
@@ -65,6 +67,7 @@ do
 	s|slice    )  slices=$OPTARG ;;
 	o|output   )  output=$OPTARG ;;
 	d|downloader ) downloader=$OPTARG ;;
+	t|tool     ) downloader=$OPTARG ;;
 	* )  echo -e "\n  Option does not exist : $OPTARG\n"
 	    usage; exit 1   ;;
     esac    # --- end of case ---
@@ -116,9 +119,15 @@ else
     size_in_byte=$(wget --spider --server-response "$url" 2>&1 | sed -n 's/.*[Cc]ontent-[Ll]ength: *\([0-9]*\).*/\1/p' | tail -1)
 fi
 
+# Fallback to single-threaded download if content length is not available
 if ! [[ $size_in_byte =~ ^[0-9]+$ ]];then
-    printf "\e[31mCould not get content length, make sure your resource have content length response.\e[0m\n"
-    exit 1
+    printf "\e[33mCould not get content length, falling back to single-threaded download.\e[0m\n"
+    if [ "$downloader" = "curl" ];then
+        curl "$url" -o "${file_to_save}"
+    else
+        wget "$url" -O "${file_to_save}"
+    fi
+    exit $?
 fi
 
 size_per_slice=$(($size_in_byte/$slices))
@@ -174,6 +183,8 @@ do
 done
 
 prev_kb=0
+stall_count=0
+max_stall=30  # 30 seconds without progress before fallback
 until [ $is_finished -eq 1 ]
 do
 	if [ -f $$.1 ];then
@@ -187,6 +198,27 @@ do
 		
 		# Calculate current speed (instantaneous)
 		current_speed=$((total_kb - prev_kb))
+		
+		# Check if download has stalled
+		if [ $current_speed -eq 0 ] && [ $percentage -lt 100 ];then
+			stall_count=$((stall_count+1))
+			if [ $stall_count -ge $max_stall ];then
+				echo
+				printf "\e[33mDownload stalled, falling back to single-threaded download.\e[0m\n"
+				# Clean up partial files
+				rm -f $$.*
+				# Fallback to single-threaded download
+				if [ "$downloader" = "curl" ];then
+					curl "$url" -o "${file_to_save}"
+				else
+					wget "$url" -O "${file_to_save}"
+				fi
+				exit $?
+			fi
+		else
+			stall_count=0
+		fi
+		
 		prev_kb=$total_kb
 		
 		# Calculate average speed
