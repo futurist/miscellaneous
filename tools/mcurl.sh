@@ -132,7 +132,7 @@ function callback()
 	finished_slice=$((finished_slice+1))
 	if [ $finished_slice -eq $total_slice ];then
 		# Concatenate all parts in order
-		for s in `seq 1 $total_slice`
+		for s in $(seq 1 $total_slice)
 		do
 			if [ -f $$.$s ];then
 				cat $$.$s >> "${file_to_save}"
@@ -160,7 +160,7 @@ function run()
 trap callback 10
 
 start_time=$(date +%s)
-for s in `seq $total_slice`
+for s in $(seq $total_slice)
 do
 	begin=$((($s-1)*${size_per_slice}))
 	if [ $begin -ne 0 ];then
