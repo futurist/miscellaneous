@@ -56,10 +56,16 @@ function usage ()
     -t|tool       Specify download tool to use (curl or wget), auto-detect if not specified
     -d|downloader Same as -t option (for backward compatibility)
     -x|extra-args Extra arguments to pass to curl/wget (e.g., '--connect-timeout 10')
+                  Note: Arguments are word-split, so quote properly if needed
     
     Environment Variables:
     CURL_OPTS     Extra options to pass to curl (when curl is used)
-    WGET_OPTS     Extra options to pass to wget (when wget is used)"
+    WGET_OPTS     Extra options to pass to wget (when wget is used)
+    
+    Examples:
+    ./mcurl.sh -x '--connect-timeout 10 --max-time 30' URL
+    CURL_OPTS='--connect-timeout 5' ./mcurl.sh URL
+    ./mcurl.sh -t wget -x '--timeout=10 --tries=3' URL"
 
 }    # ----------  end of function usage  ----------
 
@@ -129,6 +135,9 @@ if [ -n "$extra_args" ];then
         tool_extra_opts="$extra_args"
     fi
 fi
+
+# Note: tool_extra_opts is intentionally used unquoted in command executions
+# to allow word splitting for multiple arguments (e.g., "--timeout 5" becomes two args)
 
 url_no_query=${url%%\?*}
 file_to_save=${url_no_query##*/}
