@@ -162,13 +162,13 @@ function callback()
 function run()
 {
 	if [ "$downloader" = "curl" ];then
-		curl -r $2-$3 "$url" -o $1 2>/dev/null && kill -n 10 $$ &
+		curl -r "$2-$3" "$url" -o "$1" 2>/dev/null && kill -n 10 $$ &
 	else
 		# wget uses different syntax for range requests
 		if [ -z "$3" ];then
-			wget --header="Range: bytes=$2-" "$url" -O $1 2>/dev/null && kill -n 10 $$ &
+			wget --header="Range: bytes=$2-" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
 		else
-			wget --header="Range: bytes=$2-$3" "$url" -O $1 2>/dev/null && kill -n 10 $$ &
+			wget --header="Range: bytes=$2-$3" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
 		fi
 	fi
 }
