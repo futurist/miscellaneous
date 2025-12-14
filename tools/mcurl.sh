@@ -24,6 +24,7 @@
 
 slices=20
 downloader=""
+stall_timeout=30  # seconds without progress before fallback to single-threaded
 
 case $OSTYPE in
     *linux*) slices=$(grep -c processor /proc/cpuinfo) ;;
@@ -112,6 +113,17 @@ file_to_save=${url_no_query##*/}
 
 echo "Download $url to $file_to_save with $slices tasks using $downloader."
 
+# Function to perform single-threaded download fallback
+function fallback_download()
+{
+	if [ "$downloader" = "curl" ];then
+		curl "$url" -o "${file_to_save}"
+	else
+		wget "$url" -O "${file_to_save}"
+	fi
+	exit $?
+}
+
 # Get content length based on downloader
 if [ "$downloader" = "curl" ];then
     size_in_byte=$(curl -I "$url" 2>/dev/null | sed -n 's/\([Cc]ontent-[Ll]ength:\)\(.*\)/\2/p' | tr -d [[:space:]])
@@ -122,12 +134,7 @@ fi
 # Fallback to single-threaded download if content length is not available
 if ! [[ $size_in_byte =~ ^[0-9]+$ ]];then
     printf "\e[33mCould not get content length, falling back to single-threaded download.\e[0m\n"
-    if [ "$downloader" = "curl" ];then
-        curl "$url" -o "${file_to_save}"
-    else
-        wget "$url" -O "${file_to_save}"
-    fi
-    exit $?
+    fallback_download
 fi
 
 size_per_slice=$(($size_in_byte/$slices))
@@ -173,7 +180,7 @@ for s in $(seq $total_slice)
 do
 	begin=$((($s-1)*${size_per_slice}))
 	if [ $begin -ne 0 ];then
-		begin=$((begin+=1))
+		begin=$((begin+1))
 	fi
 	end=$(($s*$size_per_slice))
 	if [ $end -gt $size_in_byte ];then
@@ -184,7 +191,6 @@ done
 
 prev_kb=0
 stall_count=0
-max_stall=30  # 30 seconds without progress before fallback
 until [ $is_finished -eq 1 ]
 do
 	if [ -f $$.1 ];then
@@ -202,18 +208,12 @@ do
 		# Check if download has stalled
 		if [ $current_speed -eq 0 ] && [ $percentage -lt 100 ];then
 			stall_count=$((stall_count+1))
-			if [ $stall_count -ge $max_stall ];then
+			if [ $stall_count -ge $stall_timeout ];then
 				echo
 				printf "\e[33mDownload stalled, falling back to single-threaded download.\e[0m\n"
 				# Clean up partial files
 				rm -f $$.*
-				# Fallback to single-threaded download
-				if [ "$downloader" = "curl" ];then
-					curl "$url" -o "${file_to_save}"
-				else
-					wget "$url" -O "${file_to_save}"
-				fi
-				exit $?
+				fallback_download
 			fi
 		else
 			stall_count=0
