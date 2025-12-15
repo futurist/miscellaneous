@@ -43,7 +43,7 @@ esac
 url=
 output=
 
-__ScriptVersion="v0.4.1"
+__ScriptVersion="v0.4.2"
 
 #===  FUNCTION  ================================================================
 #         NAME:  usage
@@ -348,7 +348,6 @@ while true; do
 	check_count=$((check_count + 1))
 	
 	# Get current progress (optimize by checking files less frequently)
-	current_speed=0
 	if [ $((check_count % 2)) -eq 0 ];then
 		total_kb=$(BLOCKSIZE=1024 du -k temp.$$.chunk.* 2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
 		# Add already concatenated data
@@ -360,6 +359,13 @@ while true; do
 		# Calculate current speed only when we update total_kb
 		current_speed=$((total_kb - prev_kb))
 		prev_kb=$total_kb
+		
+		duration=$((`date +%s`-$start_time))
+		
+		# Calculate percentage based on chunks concatenated, not file size
+		# This is more accurate especially when chunks are being deleted as they're concatenated
+		percentage=$((concatenated_up_to * 100 / total_chunks))
+		[ $percentage -gt 100 ] && percentage=100
 		
 		# Check if download has stalled (only check when we have fresh data)
 		if [ $current_speed -eq 0 ] && [ $percentage -lt 100 ];then
@@ -376,20 +382,13 @@ while true; do
 		else
 			stall_count=0
 		fi
-	fi
-	
-	duration=$((`date +%s`-$start_time))
-	
-	# Calculate percentage
-	downloaded_bytes=$((total_kb * 1024))
-	percentage=$((downloaded_bytes * 100 / size_in_byte))
-	[ $percentage -gt 100 ] && percentage=100
-	
-	# Calculate average speed
-	if [ $duration -gt 0 ];then
-		avg_speed=$(($total_kb/$duration))
-		printf "\rProgress: %3d%% | Speed: %4d KiB/s | Avg: %4d KiB/s | Chunks: %d/%d" \
-			$percentage $current_speed $avg_speed $concatenated_up_to $total_chunks
+		
+		# Calculate average speed and display progress (only when we have fresh data)
+		if [ $duration -gt 0 ];then
+			avg_speed=$(($total_kb/$duration))
+			printf "\rProgress: %3d%% | Speed: %4d KiB/s | Avg: %4d KiB/s | Chunks: %d/%d" \
+				$percentage $current_speed $avg_speed $concatenated_up_to $total_chunks
+		fi
 	fi
 	
 	# Try to concatenate more chunks (every other iteration)
