@@ -23,11 +23,14 @@
 # v0.2.1      add -t|tool option, add fallback to single-threaded download on errors
 # v0.2.2      add support for passing extra args to curl/wget via -x option or env vars
 # v0.3        remove -d flag, fix stuck at 100%, add temp. prefix, cleanup old temp files
+# v0.4        add chunk-based downloading with dynamic worker pool and batch concatenation
 
 slices=20
 downloader=""
 stall_timeout=30  # seconds without progress before fallback to single-threaded
 extra_args=""  # additional arguments to pass to curl/wget
+chunk_size=$((1024 * 1024))  # default 1MB chunk size
+batch_size=16  # concatenate chunks in batches of 16
 
 case $OSTYPE in
     *linux*) slices=$(grep -c processor /proc/cpuinfo) ;;
@@ -39,7 +42,7 @@ esac
 url=
 output=
 
-__ScriptVersion="v0.3"
+__ScriptVersion="v0.4"
 
 #===  FUNCTION  ================================================================
 #         NAME:  usage
@@ -52,7 +55,8 @@ function usage ()
     Options:
     -h|help       Display this message
     -v|version    Display script version
-    -s|slice      How many slices the download task will split, default is $slices
+    -s|slice      How many worker threads to use, default is $slices
+    -c|chunk      Chunk size in bytes (supports K, M suffixes), default is 1M
     -o|output     Specify the output file name, use the guessing file name from url as output file name if not specify this option
     -t|tool       Specify download tool to use (curl or wget), auto-detect if not specified
     -x|extra-args Extra arguments to pass to curl/wget (e.g., '--connect-timeout 10')
@@ -63,6 +67,7 @@ function usage ()
     WGET_OPTS     Extra options to pass to wget (when wget is used)
     
     Examples:
+    ./mcurl.sh -c 2M -s 4 URL
     ./mcurl.sh -x '--connect-timeout 10 --max-time 30' URL
     CURL_OPTS='--connect-timeout 5' ./mcurl.sh URL
     ./mcurl.sh -t wget -x '--timeout=10 --tries=3' URL"
@@ -73,12 +78,28 @@ function usage ()
 #  Handle command line arguments
 #-----------------------------------------------------------------------
 
-while getopts ":hvs:o:t:x:" opt
+while getopts ":hvs:o:t:x:c:" opt
 do
     case $opt in
 	h|help     )  usage; exit 0   ;;
 	v|version  )  echo "Multi tasks downloader for curl/wget, version $__ScriptVersion"; exit 0   ;;
 	s|slice    )  slices=$OPTARG ;;
+	c|chunk    )  
+	    # Parse chunk size with K/M suffixes
+	    chunk_arg=$OPTARG
+	    if [[ $chunk_arg =~ ^([0-9]+)([KMkm])?$ ]];then
+	        num=${BASH_REMATCH[1]}
+	        suffix=${BASH_REMATCH[2]}
+	        case ${suffix^^} in
+	            K) chunk_size=$((num * 1024)) ;;
+	            M) chunk_size=$((num * 1024 * 1024)) ;;
+	            *) chunk_size=$num ;;
+	        esac
+	    else
+	        echo "Invalid chunk size: $chunk_arg"
+	        usage; exit 1
+	    fi
+	    ;;
 	o|output   )  output=$OPTARG ;;
 	t|tool     ) downloader=$OPTARG ;;
 	x|extra-args ) extra_args=$OPTARG ;;
@@ -162,7 +183,8 @@ shopt -u nullglob
 # Clean up our own temp files from any previous failed runs
 rm -f "temp.$$."* 2>/dev/null
 
-echo "Download $url to $file_to_save with $slices tasks using $downloader."
+echo "Download $url to $file_to_save with $slices workers using $downloader."
+echo "Chunk size: $((chunk_size / 1024))K, Batch size: $batch_size chunks"
 [ -n "$tool_extra_opts" ] && echo "Extra options: $tool_extra_opts"
 
 # Function to perform single-threaded download fallback
@@ -189,109 +211,191 @@ if ! [[ $size_in_byte =~ ^[0-9]+$ ]];then
     fallback_download
 fi
 
-size_per_slice=$(($size_in_byte/$slices))
-let size_per_slice=${size_per_slice}+1  # avoid rounding issue
+# Calculate total chunks needed
+total_chunks=$(( (size_in_byte + chunk_size - 1) / chunk_size ))
+echo "Total chunks: $total_chunks"
 
-total_slice=${slices}
-finished_slice=0
+# Initialize work queue and state tracking
+next_chunk=0
+completed_chunks=0
+concatenated_up_to=0  # Track which chunks have been written to main file
 is_finished=0
-function callback()
-{
-	finished_slice=$((finished_slice+1))
-	if [ $finished_slice -eq $total_slice ];then
-		# Concatenate all parts in order
-		for s in $(seq 1 $total_slice)
-		do
-			if [ -f "temp.$$.$s" ];then
-				cat "temp.$$.$s" >> "${file_to_save}"
-				rm "temp.$$.$s"
-			fi
-		done
-		is_finished=1
-	fi
-}
 
-function run()
+# Lock file for coordinating chunk assignment
+chunk_lock="temp.$$.lock"
+touch "$chunk_lock"
+
+# Function to get next chunk to download
+function get_next_chunk()
 {
-	if [ "$downloader" = "curl" ];then
-		curl $tool_extra_opts -r "$2-$3" "$url" -o "$1" 2>/dev/null && kill -n 10 $$ &
-	else
-		# wget uses different syntax for range requests
-		if [ -z "$3" ];then
-			wget $tool_extra_opts --header="Range: bytes=$2-" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
+	# Simple file-based locking
+	(
+		flock -x 200
+		if [ $next_chunk -lt $total_chunks ];then
+			chunk=$next_chunk
+			next_chunk=$((next_chunk + 1))
+			echo $chunk
 		else
-			wget $tool_extra_opts --header="Range: bytes=$2-$3" "$url" -O "$1" 2>/dev/null && kill -n 10 $$ &
+			echo "-1"
 		fi
-	fi
+	) 200>"$chunk_lock"
 }
 
-trap callback 10
+# Function to download a single chunk
+function download_chunk()
+{
+	local chunk_num=$1
+	local start_byte=$((chunk_num * chunk_size))
+	local end_byte=$((start_byte + chunk_size - 1))
+	
+	# Last chunk might be smaller
+	if [ $end_byte -ge $size_in_byte ];then
+		end_byte=$((size_in_byte - 1))
+	fi
+	
+	local temp_file="temp.$$.chunk.$chunk_num"
+	
+	if [ "$downloader" = "curl" ];then
+		curl $tool_extra_opts -r "$start_byte-$end_byte" "$url" -o "$temp_file" 2>/dev/null
+	else
+		wget $tool_extra_opts --header="Range: bytes=$start_byte-$end_byte" "$url" -O "$temp_file" 2>/dev/null
+	fi
+	
+	return $?
+}
 
+# Function to concatenate ready chunks in batches
+function concat_ready_chunks()
+{
+	local batch_start=$concatenated_up_to
+	local batch_end=$((batch_start + batch_size - 1))
+	[ $batch_end -ge $total_chunks ] && batch_end=$((total_chunks - 1))
+	
+	# Check if we have a complete batch ready
+	local all_ready=1
+	for (( i=batch_start; i<=batch_end; i++ )); do
+		if [ ! -f "temp.$$.chunk.$i" ];then
+			all_ready=0
+			break
+		fi
+	done
+	
+	# If batch is ready, concatenate it
+	if [ $all_ready -eq 1 ];then
+		for (( i=batch_start; i<=batch_end; i++ )); do
+			cat "temp.$$.chunk.$i" >> "${file_to_save}"
+			rm "temp.$$.chunk.$i"
+		done
+		concatenated_up_to=$((batch_end + 1))
+		return 0
+	fi
+	return 1
+}
+
+# Worker function
+function worker()
+{
+	while true; do
+		chunk=$(get_next_chunk)
+		if [ "$chunk" = "-1" ];then
+			break
+		fi
+		
+		download_chunk $chunk
+		
+		# Mark chunk as completed
+		(
+			flock -x 200
+			completed_chunks=$((completed_chunks + 1))
+			
+			# Try to concatenate ready chunks without blocking
+			concat_ready_chunks
+			
+		) 200>"$chunk_lock"
+	done
+}
+
+# Start worker processes
 start_time=$(date +%s)
-for s in $(seq $total_slice)
-do
-	begin=$((($s-1)*${size_per_slice}))
-	if [ $begin -ne 0 ];then
-		begin=$((begin+1))
-	fi
-	end=$(($s*$size_per_slice))
-	if [ $end -gt $size_in_byte ];then
-		end=
-	fi
-	run "temp.$$.$s" $begin $end
+for (( i=0; i<slices; i++ )); do
+	worker &
 done
 
+# Monitor progress
 prev_kb=0
 stall_count=0
-until [ $is_finished -eq 1 ]
-do
-	if [ -f "temp.$$.1" ];then
-		total_kb=$(BLOCKSIZE=1024 du -k temp.$$.*  2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
-		duration=$((`date +%s`-$start_time))
-		
-		# Calculate percentage (cap at 100%)
-		downloaded_bytes=$((total_kb * 1024))
-		percentage=$((downloaded_bytes * 100 / size_in_byte))
-		[ $percentage -gt 100 ] && percentage=100
-		
-		# Calculate current speed (instantaneous)
-		current_speed=$((total_kb - prev_kb))
-		
-		# Check if download has stalled
-		if [ $current_speed -eq 0 ] && [ $percentage -lt 100 ];then
-			stall_count=$((stall_count+1))
-			if [ $stall_count -ge $stall_timeout ];then
-				echo
-				printf "\e[33mDownload stalled, falling back to single-threaded download.\e[0m\n"
-				# Clean up partial files
-				rm -f temp.$$.*
-				fallback_download
-			fi
-		else
-			stall_count=0
-		fi
-		
-		prev_kb=$total_kb
-		
-		# Calculate average speed
-		if [ $duration -gt 0 ];then
-			avg_speed=$(($total_kb/$duration))
-			printf "\rProgress: %3d%% | Speed: %4d KiB/s | Avg: %4d KiB/s" $percentage $current_speed $avg_speed
-		fi
-		
-		# If we've reached 100% and callback hasn't triggered yet, give it a moment
-		# Then trigger callback to avoid getting stuck
-		if [ $percentage -eq 100 ] && [ $is_finished -eq 0 ];then
-			# Wait briefly for callback to complete naturally
-			sleep 1
-			# Check if still not finished after brief wait
-			if [ $is_finished -eq 0 ];then
-				# All downloads complete but callback didn't finish, trigger manually
-				callback
-			fi
-		fi
+while [ $concatenated_up_to -lt $total_chunks ] || [ $(jobs -r | wc -l) -gt 0 ]; do
+	# Get current progress
+	total_kb=$(BLOCKSIZE=1024 du -k temp.$$.chunk.* 2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
+	# Add already concatenated data
+	if [ -f "${file_to_save}" ];then
+		concatenated_kb=$(BLOCKSIZE=1024 du -k "${file_to_save}" 2>/dev/null | awk '{print $1}')
+		total_kb=$((total_kb + concatenated_kb))
 	fi
+	
+	duration=$((`date +%s`-$start_time))
+	
+	# Calculate percentage
+	downloaded_bytes=$((total_kb * 1024))
+	percentage=$((downloaded_bytes * 100 / size_in_byte))
+	[ $percentage -gt 100 ] && percentage=100
+	
+	# Calculate current speed
+	current_speed=$((total_kb - prev_kb))
+	
+	# Check if download has stalled
+	if [ $current_speed -eq 0 ] && [ $percentage -lt 100 ];then
+		stall_count=$((stall_count+1))
+		if [ $stall_count -ge $stall_timeout ];then
+			echo
+			printf "\e[33mDownload stalled, falling back to single-threaded download.\e[0m\n"
+			# Kill all workers
+			jobs -p | xargs -r kill 2>/dev/null
+			# Clean up partial files
+			rm -f temp.$$.*
+			fallback_download
+		fi
+	else
+		stall_count=0
+	fi
+	
+	prev_kb=$total_kb
+	
+	# Calculate average speed
+	if [ $duration -gt 0 ];then
+		avg_speed=$(($total_kb/$duration))
+		printf "\rProgress: %3d%% | Speed: %4d KiB/s | Avg: %4d KiB/s | Chunks: %d/%d" \
+			$percentage $current_speed $avg_speed $concatenated_up_to $total_chunks
+	fi
+	
+	# Try to concatenate more chunks
+	(
+		flock -x 200
+		concat_ready_chunks
+	) 200>"$chunk_lock"
+	
 	sleep 1
 done
+
+# Wait for all workers to finish
+wait
+
+# Concatenate any remaining chunks
+while [ $concatenated_up_to -lt $total_chunks ]; do
+	if [ -f "temp.$$.chunk.$concatenated_up_to" ];then
+		cat "temp.$$.chunk.$concatenated_up_to" >> "${file_to_save}"
+		rm "temp.$$.chunk.$concatenated_up_to"
+		concatenated_up_to=$((concatenated_up_to + 1))
+	else
+		# Missing chunk, something went wrong
+		echo
+		printf "\e[31mError: Missing chunk $concatenated_up_to\e[0m\n"
+		exit 1
+	fi
+done
+
+# Cleanup
+rm -f "$chunk_lock"
+rm -f temp.$$.*
 
 echo
