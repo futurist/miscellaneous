@@ -24,6 +24,7 @@
 # v0.2.2      add support for passing extra args to curl/wget via -x option or env vars
 # v0.3        remove -d flag, fix stuck at 100%, add temp. prefix, cleanup old temp files
 # v0.4        add chunk-based downloading with dynamic worker pool and batch concatenation
+# v0.4.1      fix current_speed oscillation causing false stall detection
 
 slices=20
 downloader=""
@@ -42,7 +43,7 @@ esac
 url=
 output=
 
-__ScriptVersion="v0.4"
+__ScriptVersion="v0.4.1"
 
 #===  FUNCTION  ================================================================
 #         NAME:  usage
@@ -329,6 +330,7 @@ done
 prev_kb=0
 stall_count=0
 check_count=0
+total_kb=0
 
 while true; do
 	concatenated_up_to=$(cat "$concatenated_file")
@@ -346,12 +348,33 @@ while true; do
 	check_count=$((check_count + 1))
 	
 	# Get current progress (optimize by checking files less frequently)
+	current_speed=0
 	if [ $((check_count % 2)) -eq 0 ];then
 		total_kb=$(BLOCKSIZE=1024 du -k temp.$$.chunk.* 2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
 		# Add already concatenated data
 		if [ -f "${file_to_save}" ];then
 			concatenated_kb=$(BLOCKSIZE=1024 du -k "${file_to_save}" 2>/dev/null | awk '{print $1}')
 			total_kb=$((total_kb + concatenated_kb))
+		fi
+		
+		# Calculate current speed only when we update total_kb
+		current_speed=$((total_kb - prev_kb))
+		prev_kb=$total_kb
+		
+		# Check if download has stalled (only check when we have fresh data)
+		if [ $current_speed -eq 0 ] && [ $percentage -lt 100 ];then
+			stall_count=$((stall_count+1))
+			if [ $stall_count -ge $stall_timeout ];then
+				echo
+				printf "\e[33mDownload stalled, falling back to single-threaded download.\e[0m\n"
+				# Kill all workers
+				jobs -p | xargs -r kill 2>/dev/null
+				# Clean up partial files
+				rm -f temp.$$.*
+				fallback_download
+			fi
+		else
+			stall_count=0
 		fi
 	fi
 	
@@ -361,27 +384,6 @@ while true; do
 	downloaded_bytes=$((total_kb * 1024))
 	percentage=$((downloaded_bytes * 100 / size_in_byte))
 	[ $percentage -gt 100 ] && percentage=100
-	
-	# Calculate current speed
-	current_speed=$((total_kb - prev_kb))
-	
-	# Check if download has stalled
-	if [ $current_speed -eq 0 ] && [ $percentage -lt 100 ];then
-		stall_count=$((stall_count+1))
-		if [ $stall_count -ge $stall_timeout ];then
-			echo
-			printf "\e[33mDownload stalled, falling back to single-threaded download.\e[0m\n"
-			# Kill all workers
-			jobs -p | xargs -r kill 2>/dev/null
-			# Clean up partial files
-			rm -f temp.$$.*
-			fallback_download
-		fi
-	else
-		stall_count=0
-	fi
-	
-	prev_kb=$total_kb
 	
 	# Calculate average speed
 	if [ $duration -gt 0 ];then
