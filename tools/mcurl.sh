@@ -215,26 +215,27 @@ fi
 total_chunks=$(( (size_in_byte + chunk_size - 1) / chunk_size ))
 echo "Total chunks: $total_chunks"
 
-# Initialize work queue and state tracking
-next_chunk=0
-completed_chunks=0
-concatenated_up_to=0  # Track which chunks have been written to main file
-is_finished=0
-
-# Lock file for coordinating chunk assignment
+# Initialize work queue and state tracking using files
 chunk_lock="temp.$$.lock"
+next_chunk_file="temp.$$.next_chunk"
+completed_chunks_file="temp.$$.completed"
+concatenated_file="temp.$$.concatenated"
+
 touch "$chunk_lock"
+echo "0" > "$next_chunk_file"
+echo "0" > "$completed_chunks_file"
+echo "0" > "$concatenated_file"
 
 # Function to get next chunk to download
 function get_next_chunk()
 {
-	# Simple file-based locking
+	# File-based locking with persistent state
 	(
 		flock -x 200
+		local next_chunk=$(cat "$next_chunk_file")
 		if [ $next_chunk -lt $total_chunks ];then
-			chunk=$next_chunk
-			next_chunk=$((next_chunk + 1))
-			echo $chunk
+			echo $next_chunk
+			echo $((next_chunk + 1)) > "$next_chunk_file"
 		else
 			echo "-1"
 		fi
@@ -267,6 +268,7 @@ function download_chunk()
 # Function to concatenate ready chunks in batches
 function concat_ready_chunks()
 {
+	local concatenated_up_to=$(cat "$concatenated_file")
 	local batch_start=$concatenated_up_to
 	local batch_end=$((batch_start + batch_size - 1))
 	[ $batch_end -ge $total_chunks ] && batch_end=$((total_chunks - 1))
@@ -286,7 +288,8 @@ function concat_ready_chunks()
 			cat "temp.$$.chunk.$i" >> "${file_to_save}"
 			rm "temp.$$.chunk.$i"
 		done
-		concatenated_up_to=$((batch_end + 1))
+		local new_concatenated=$((batch_end + 1))
+		echo "$new_concatenated" > "$concatenated_file"
 		return 0
 	fi
 	return 1
@@ -303,10 +306,11 @@ function worker()
 		
 		download_chunk $chunk
 		
-		# Mark chunk as completed
+		# Mark chunk as completed and try concatenation
 		(
 			flock -x 200
-			completed_chunks=$((completed_chunks + 1))
+			local completed=$(cat "$completed_chunks_file")
+			echo $((completed + 1)) > "$completed_chunks_file"
 			
 			# Try to concatenate ready chunks without blocking
 			concat_ready_chunks
@@ -324,13 +328,31 @@ done
 # Monitor progress
 prev_kb=0
 stall_count=0
-while [ $concatenated_up_to -lt $total_chunks ] || [ $(jobs -r | wc -l) -gt 0 ]; do
-	# Get current progress
-	total_kb=$(BLOCKSIZE=1024 du -k temp.$$.chunk.* 2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
-	# Add already concatenated data
-	if [ -f "${file_to_save}" ];then
-		concatenated_kb=$(BLOCKSIZE=1024 du -k "${file_to_save}" 2>/dev/null | awk '{print $1}')
-		total_kb=$((total_kb + concatenated_kb))
+check_count=0
+
+while true; do
+	concatenated_up_to=$(cat "$concatenated_file")
+	
+	# Check if all chunks are concatenated
+	if [ $concatenated_up_to -ge $total_chunks ];then
+		# Check if workers are done (only check every 5 iterations to reduce overhead)
+		if [ $((check_count % 5)) -eq 0 ];then
+			active_jobs=$(jobs -r | wc -l)
+			if [ $active_jobs -eq 0 ];then
+				break
+			fi
+		fi
+	fi
+	check_count=$((check_count + 1))
+	
+	# Get current progress (optimize by checking files less frequently)
+	if [ $((check_count % 2)) -eq 0 ];then
+		total_kb=$(BLOCKSIZE=1024 du -k temp.$$.chunk.* 2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
+		# Add already concatenated data
+		if [ -f "${file_to_save}" ];then
+			concatenated_kb=$(BLOCKSIZE=1024 du -k "${file_to_save}" 2>/dev/null | awk '{print $1}')
+			total_kb=$((total_kb + concatenated_kb))
+		fi
 	fi
 	
 	duration=$((`date +%s`-$start_time))
@@ -368,11 +390,13 @@ while [ $concatenated_up_to -lt $total_chunks ] || [ $(jobs -r | wc -l) -gt 0 ];
 			$percentage $current_speed $avg_speed $concatenated_up_to $total_chunks
 	fi
 	
-	# Try to concatenate more chunks
-	(
-		flock -x 200
-		concat_ready_chunks
-	) 200>"$chunk_lock"
+	# Try to concatenate more chunks (every other iteration)
+	if [ $((check_count % 2)) -eq 0 ];then
+		(
+			flock -x 200
+			concat_ready_chunks
+		) 200>"$chunk_lock"
+	fi
 	
 	sleep 1
 done
@@ -381,11 +405,13 @@ done
 wait
 
 # Concatenate any remaining chunks
+concatenated_up_to=$(cat "$concatenated_file")
 while [ $concatenated_up_to -lt $total_chunks ]; do
 	if [ -f "temp.$$.chunk.$concatenated_up_to" ];then
 		cat "temp.$$.chunk.$concatenated_up_to" >> "${file_to_save}"
 		rm "temp.$$.chunk.$concatenated_up_to"
 		concatenated_up_to=$((concatenated_up_to + 1))
+		echo "$concatenated_up_to" > "$concatenated_file"
 	else
 		# Missing chunk, something went wrong
 		echo
@@ -395,7 +421,7 @@ while [ $concatenated_up_to -lt $total_chunks ]; do
 done
 
 # Cleanup
-rm -f "$chunk_lock"
+rm -f "$chunk_lock" "$next_chunk_file" "$completed_chunks_file" "$concatenated_file"
 rm -f temp.$$.*
 
 echo
