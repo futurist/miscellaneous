@@ -145,13 +145,13 @@ file_to_save=${url_no_query##*/}
 
 # Cleanup any existing temp files from previous runs
 # First check if the process that created them is still running
-temp_prefix="temp.$$"
 shopt -s nullglob
 for temp_file in temp.*.*; do
     if [ -f "$temp_file" ]; then
         # Extract PID from filename (format: temp.PID.slice)
         old_pid=$(echo "$temp_file" | cut -d. -f2)
-        if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
+        # Validate that extracted PID is numeric before checking process
+        if [[ "$old_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$old_pid" 2>/dev/null; then
             # Process doesn't exist, safe to clean up
             rm -f "temp.$old_pid."* 2>/dev/null
         fi
@@ -280,11 +280,13 @@ do
 		fi
 		
 		# If we've reached 100% and callback hasn't triggered yet, give it a moment
-		# Then break to avoid getting stuck
+		# Then trigger callback to avoid getting stuck
 		if [ $percentage -eq 100 ] && [ $is_finished -eq 0 ];then
-			sleep 2
+			# Wait briefly for callback to complete naturally
+			sleep 1
+			# Check if still not finished after brief wait
 			if [ $is_finished -eq 0 ];then
-				# Callback might have missed, trigger concatenation manually
+				# All downloads complete but callback didn't finish, trigger manually
 				callback
 			fi
 		fi
