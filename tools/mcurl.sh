@@ -22,6 +22,7 @@
 # v0.2        support both curl and wget, fix concat bug, show percentage and speed
 # v0.2.1      add -t|tool option, add fallback to single-threaded download on errors
 # v0.2.2      add support for passing extra args to curl/wget via -x option or env vars
+# v0.3        remove -d flag, fix stuck at 100%, add temp. prefix, cleanup old temp files
 
 slices=20
 downloader=""
@@ -38,7 +39,7 @@ esac
 url=
 output=
 
-__ScriptVersion="v0.2.2"
+__ScriptVersion="v0.3"
 
 #===  FUNCTION  ================================================================
 #         NAME:  usage
@@ -54,7 +55,6 @@ function usage ()
     -s|slice      How many slices the download task will split, default is $slices
     -o|output     Specify the output file name, use the guessing file name from url as output file name if not specify this option
     -t|tool       Specify download tool to use (curl or wget), auto-detect if not specified
-    -d|downloader Same as -t option (for backward compatibility)
     -x|extra-args Extra arguments to pass to curl/wget (e.g., '--connect-timeout 10')
                   Note: Arguments are word-split, so quote properly if needed
     
@@ -73,14 +73,13 @@ function usage ()
 #  Handle command line arguments
 #-----------------------------------------------------------------------
 
-while getopts ":hvs:o:d:t:x:" opt
+while getopts ":hvs:o:t:x:" opt
 do
     case $opt in
 	h|help     )  usage; exit 0   ;;
 	v|version  )  echo "Multi tasks downloader for curl/wget, version $__ScriptVersion"; exit 0   ;;
 	s|slice    )  slices=$OPTARG ;;
 	o|output   )  output=$OPTARG ;;
-	d|downloader ) downloader=$OPTARG ;;
 	t|tool     ) downloader=$OPTARG ;;
 	x|extra-args ) extra_args=$OPTARG ;;
 	* )  echo -e "\n  Option does not exist : $OPTARG\n"
@@ -144,6 +143,25 @@ file_to_save=${url_no_query##*/}
 
 [ x$output != x ] && file_to_save=$output
 
+# Cleanup any existing temp files from previous runs
+# First check if the process that created them is still running
+temp_prefix="temp.$$"
+shopt -s nullglob
+for temp_file in temp.*.*; do
+    if [ -f "$temp_file" ]; then
+        # Extract PID from filename (format: temp.PID.slice)
+        old_pid=$(echo "$temp_file" | cut -d. -f2)
+        if [ -n "$old_pid" ] && ! kill -0 "$old_pid" 2>/dev/null; then
+            # Process doesn't exist, safe to clean up
+            rm -f "temp.$old_pid."* 2>/dev/null
+        fi
+    fi
+done
+shopt -u nullglob
+
+# Clean up our own temp files from any previous failed runs
+rm -f "temp.$$."* 2>/dev/null
+
 echo "Download $url to $file_to_save with $slices tasks using $downloader."
 [ -n "$tool_extra_opts" ] && echo "Extra options: $tool_extra_opts"
 
@@ -184,9 +202,9 @@ function callback()
 		# Concatenate all parts in order
 		for s in $(seq 1 $total_slice)
 		do
-			if [ -f $$.$s ];then
-				cat $$.$s >> "${file_to_save}"
-				rm $$.$s
+			if [ -f "temp.$$.$s" ];then
+				cat "temp.$$.$s" >> "${file_to_save}"
+				rm "temp.$$.$s"
 			fi
 		done
 		is_finished=1
@@ -220,15 +238,15 @@ do
 	if [ $end -gt $size_in_byte ];then
 		end=
 	fi
-	run $$.$s $begin $end
+	run "temp.$$.$s" $begin $end
 done
 
 prev_kb=0
 stall_count=0
 until [ $is_finished -eq 1 ]
 do
-	if [ -f $$.1 ];then
-		total_kb=$(BLOCKSIZE=1024 du -k $$.* 2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
+	if [ -f "temp.$$.1" ];then
+		total_kb=$(BLOCKSIZE=1024 du -k temp.$$.*  2>/dev/null | awk '{t+=$1}END{printf "%d", t}')
 		duration=$((`date +%s`-$start_time))
 		
 		# Calculate percentage (cap at 100%)
@@ -246,7 +264,7 @@ do
 				echo
 				printf "\e[33mDownload stalled, falling back to single-threaded download.\e[0m\n"
 				# Clean up partial files
-				rm -f $$.*
+				rm -f temp.$$.*
 				fallback_download
 			fi
 		else
@@ -259,6 +277,16 @@ do
 		if [ $duration -gt 0 ];then
 			avg_speed=$(($total_kb/$duration))
 			printf "\rProgress: %3d%% | Speed: %4d KiB/s | Avg: %4d KiB/s" $percentage $current_speed $avg_speed
+		fi
+		
+		# If we've reached 100% and callback hasn't triggered yet, give it a moment
+		# Then break to avoid getting stuck
+		if [ $percentage -eq 100 ] && [ $is_finished -eq 0 ];then
+			sleep 2
+			if [ $is_finished -eq 0 ];then
+				# Callback might have missed, trigger concatenation manually
+				callback
+			fi
 		fi
 	fi
 	sleep 1
